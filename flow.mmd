@@ -1,104 +1,112 @@
 graph TD
-    subgraph External Services
-        OpenAI[DeepSeek API]
-        Gemini[Google Gemini API]
-        SerpAPI[SerpAPI Search]
+    subgraph Configuration
+        Config[Config Class]
+        Config -->|Validates| EnvVars[Environment Variables]
+        Config -->|Creates| Directories[Directory Structure]
     end
 
-    subgraph Storage
-        DB[(SQLite Database)]
-        UploadDir[Upload Directory]
-        ProcessedDir[Processed Directory]
-        DocStore[Document Store]
-    end
-
-    subgraph Models
-        LocalLLM[Local Llama Model]
-        subgraph Reasoning Models
-            GeminiThinking[Gemini Thinking]
-            GeminiFlash[Gemini Flash]
-            DeepseekReasoner[Deepseek Reasoner]
-            DeepseekChat[Deepseek Chat]
-        end
-    end
-
-    subgraph Document Processing
-        DocProcessor[Document Processor]
-        MarkdownConverter[Markdown Converter]
-        ContentLengthCheck{Content Length > 45k?}
-        HasImages{Has Images?}
-        ReasoningEnabled{Reasoning Enabled?}
-    end
-
-    subgraph Endpoints
-        Chat[/Chat Endpoint/]
-        ProcessDoc[/Process Document Endpoint/]
-        GetConv[/Get Conversation Endpoint/]
-    end
-
-    subgraph Core Components
-        ConvManager[Conversation Manager]
-        ContentHandler[Content Handler]
-        ReasoningEngine[Reasoning Engine]
+    subgraph Core Services
+        ModelManager[Model Manager]
+        DatabaseManager[Database Manager]
+        DocumentStore[Document Store]
         FallbackHandler[Fallback Handler]
     end
 
+    subgraph External Services
+        DeepseekAPI[Deepseek API]
+        GeminiAPI[Google Gemini API]
+        SerpAPI[SerpAPI Search]
+        LocalLLM[Local Llama Model]
+    end
+
+    subgraph Document Processing Pipeline
+        DocProcessor[Document Processor]
+        subgraph Processors
+            PDFProc[PDF Processor]
+            DOCXProc[DOCX Processor]
+            TXTProc[Text Processor]
+        end
+        MarkdownConverter[Markdown Converter]
+        ContentHandler[Content Handler]
+    end
+
+    subgraph Processing Logic
+        ContentLength{Content Length > 45k?}
+        HasImages{Has Images?}
+        ReasoningEnabled{Reasoning Enabled?}
+        APIAvailable{Deepseek Available?}
+    end
+
+    subgraph Reasoning Engine
+        ReasoningEngine[Reasoning Engine]
+        subgraph Models
+            GeminiThinking[Gemini Thinking]
+            GeminiFlash[Gemini Flash]
+            DeepseekReasoner[Deepseek Reasoner]
+        end
+    end
+
+    subgraph API Endpoints
+        ChatEndpoint[/Chat Endpoint/]
+        DocEndpoint[/Document Endpoint/]
+        GenEndpoint[/Generate Endpoint/]
+        ConvEndpoint[/Conversation Endpoint/]
+    end
+
+    subgraph State Management
+        Conversation[Conversation Manager]
+        DB[(SQLite Database)]
+        FileStore[File Storage]
+    end
+
+    %% Core Service Connections
+    ModelManager --> LocalLLM
+    ModelManager --> DeepseekAPI
+    ModelManager --> GeminiAPI
+    DatabaseManager --> DB
+
     %% Document Processing Flow
-    ProcessDoc --> DocProcessor
-    DocProcessor --> MarkdownConverter
-    MarkdownConverter --> ContentLengthCheck
-    ContentLengthCheck -->|Yes| GeminiThinking
-    ContentLengthCheck -->|No| HasImages
-    
-    %% Reasoning Path Selection
+    DocEndpoint --> DocProcessor
+    DocProcessor --> PDFProc & DOCXProc & TXTProc
+    PDFProc & DOCXProc & TXTProc --> MarkdownConverter
+    MarkdownConverter --> ContentLength
+
+    %% Content Processing Logic
+    ContentLength -->|Yes| GeminiThinking
+    ContentLength -->|No| HasImages
     HasImages -->|Yes| ReasoningEnabled
-    HasImages -->|No| DeepseekCheck
+    HasImages -->|No| APIAvailable
     
     ReasoningEnabled -->|Yes| GeminiThinking
     ReasoningEnabled -->|No| GeminiFlash
     
-    subgraph DeepseekCheck
-        DeepseekAPI{Deepseek API Available?}
-        ReasoningFlag{Reasoning Enabled?}
-    end
-    
-    DeepseekCheck --> DeepseekAPI
-    DeepseekAPI -->|Yes| ReasoningFlag
-    DeepseekAPI -->|No| FallbackHandler
-    
-    ReasoningFlag -->|Yes| DeepseekReasoner
-    ReasoningFlag -->|No| DeepseekChat
-    
-    FallbackHandler -->|Reasoning True| GeminiThinking
-    FallbackHandler -->|Reasoning False| GeminiFlash
-
-    %% Final Processing
-    GeminiThinking --> ReasoningEngine
-    GeminiFlash --> ReasoningEngine
-    DeepseekReasoner --> ReasoningEngine
-    DeepseekChat --> ReasoningEngine
-    
-    ReasoningEngine --> LocalLLM
+    APIAvailable -->|Yes| DeepseekReasoner
+    APIAvailable -->|No| FallbackHandler
     
     %% Chat Flow
-    Chat --> ConvManager
-    ConvManager --> ContentHandler
-    ContentHandler --> ContentLengthCheck
-    ConvManager --> |Search|SerpAPI
-    ConvManager --> DB
-
-    %% Conversation Retrieval
-    GetConv --> DB
-
-    style LocalLLM fill:#f9f,stroke:#333,stroke-width:2px
+    ChatEndpoint --> Conversation
+    Conversation --> ContentHandler
+    ContentHandler --> ContentLength
+    Conversation -->|Search| SerpAPI
+    
+    %% Data Storage
+    DocProcessor --> FileStore
+    Conversation --> DB
+    
+    %% Fallback Paths
+    FallbackHandler -->|Reasoning| GeminiThinking
+    FallbackHandler -->|Standard| GeminiFlash
+    
+    %% Final Processing
+    ReasoningEngine --> LocalLLM
+    
+    style Config fill:#f9f,stroke:#333,stroke-width:2px
+    style ModelManager fill:#f9f,stroke:#333,stroke-width:2px
+    style DatabaseManager fill:#f9f,stroke:#333,stroke-width:2px
+    style ReasoningEngine fill:#fcf,stroke:#333,stroke-width:2px
+    style LocalLLM fill:#cfc,stroke:#333,stroke-width:2px
     style DB fill:#9cf,stroke:#333,stroke-width:2px
-    style DocStore fill:#9cf,stroke:#333,stroke-width:2px
-    style GeminiThinking fill:#fcf,stroke:#333,stroke-width:2px
-    style GeminiFlash fill:#fcf,stroke:#333,stroke-width:2px
-    style DeepseekReasoner fill:#fcf,stroke:#333,stroke-width:2px
-    style DeepseekChat fill:#fcf,stroke:#333,stroke-width:2px
-    style ContentLengthCheck fill:#ff9,stroke:#333,stroke-width:2px
+    style ContentLength fill:#ff9,stroke:#333,stroke-width:2px
     style HasImages fill:#ff9,stroke:#333,stroke-width:2px
     style ReasoningEnabled fill:#ff9,stroke:#333,stroke-width:2px
-    style DeepseekAPI fill:#ff9,stroke:#333,stroke-width:2px
-    style ReasoningFlag fill:#ff9,stroke:#333,stroke-width:2px
+    style APIAvailable fill:#ff9,stroke:#333,stroke-width:2px
