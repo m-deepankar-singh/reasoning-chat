@@ -1,0 +1,104 @@
+graph TD
+    subgraph External Services
+        OpenAI[DeepSeek API]
+        Gemini[Google Gemini API]
+        SerpAPI[SerpAPI Search]
+    end
+
+    subgraph Storage
+        DB[(SQLite Database)]
+        UploadDir[Upload Directory]
+        ProcessedDir[Processed Directory]
+        DocStore[Document Store]
+    end
+
+    subgraph Models
+        LocalLLM[Local Llama Model]
+        subgraph Reasoning Models
+            GeminiThinking[Gemini Thinking]
+            GeminiFlash[Gemini Flash]
+            DeepseekReasoner[Deepseek Reasoner]
+            DeepseekChat[Deepseek Chat]
+        end
+    end
+
+    subgraph Document Processing
+        DocProcessor[Document Processor]
+        MarkdownConverter[Markdown Converter]
+        ContentLengthCheck{Content Length > 45k?}
+        HasImages{Has Images?}
+        ReasoningEnabled{Reasoning Enabled?}
+    end
+
+    subgraph Endpoints
+        Chat[/Chat Endpoint/]
+        ProcessDoc[/Process Document Endpoint/]
+        GetConv[/Get Conversation Endpoint/]
+    end
+
+    subgraph Core Components
+        ConvManager[Conversation Manager]
+        ContentHandler[Content Handler]
+        ReasoningEngine[Reasoning Engine]
+        FallbackHandler[Fallback Handler]
+    end
+
+    %% Document Processing Flow
+    ProcessDoc --> DocProcessor
+    DocProcessor --> MarkdownConverter
+    MarkdownConverter --> ContentLengthCheck
+    ContentLengthCheck -->|Yes| GeminiThinking
+    ContentLengthCheck -->|No| HasImages
+    
+    %% Reasoning Path Selection
+    HasImages -->|Yes| ReasoningEnabled
+    HasImages -->|No| DeepseekCheck
+    
+    ReasoningEnabled -->|Yes| GeminiThinking
+    ReasoningEnabled -->|No| GeminiFlash
+    
+    subgraph DeepseekCheck
+        DeepseekAPI{Deepseek API Available?}
+        ReasoningFlag{Reasoning Enabled?}
+    end
+    
+    DeepseekCheck --> DeepseekAPI
+    DeepseekAPI -->|Yes| ReasoningFlag
+    DeepseekAPI -->|No| FallbackHandler
+    
+    ReasoningFlag -->|Yes| DeepseekReasoner
+    ReasoningFlag -->|No| DeepseekChat
+    
+    FallbackHandler -->|Reasoning True| GeminiThinking
+    FallbackHandler -->|Reasoning False| GeminiFlash
+
+    %% Final Processing
+    GeminiThinking --> ReasoningEngine
+    GeminiFlash --> ReasoningEngine
+    DeepseekReasoner --> ReasoningEngine
+    DeepseekChat --> ReasoningEngine
+    
+    ReasoningEngine --> LocalLLM
+    
+    %% Chat Flow
+    Chat --> ConvManager
+    ConvManager --> ContentHandler
+    ContentHandler --> ContentLengthCheck
+    ConvManager --> |Search|SerpAPI
+    ConvManager --> DB
+
+    %% Conversation Retrieval
+    GetConv --> DB
+
+    style LocalLLM fill:#f9f,stroke:#333,stroke-width:2px
+    style DB fill:#9cf,stroke:#333,stroke-width:2px
+    style DocStore fill:#9cf,stroke:#333,stroke-width:2px
+    style GeminiThinking fill:#fcf,stroke:#333,stroke-width:2px
+    style GeminiFlash fill:#fcf,stroke:#333,stroke-width:2px
+    style DeepseekReasoner fill:#fcf,stroke:#333,stroke-width:2px
+    style DeepseekChat fill:#fcf,stroke:#333,stroke-width:2px
+    style ContentLengthCheck fill:#ff9,stroke:#333,stroke-width:2px
+    style HasImages fill:#ff9,stroke:#333,stroke-width:2px
+    style ReasoningEnabled fill:#ff9,stroke:#333,stroke-width:2px
+    style DeepseekAPI fill:#ff9,stroke:#333,stroke-width:2px
+    style ReasoningFlag fill:#ff9,stroke:#333,stroke-width:2px
