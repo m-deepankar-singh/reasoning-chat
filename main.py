@@ -20,17 +20,31 @@ from pypdf import PdfReader
 from docx import Document
 import mammoth
 import time
+import logging
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import Message
+from logging_config import setup_logger
+from fastapi.responses import JSONResponse
 
 # Configuration and Environment Setup
 load_dotenv()
 
+# Setup logging
+logger = setup_logger(log_level="INFO")
+
 class Config:
     UPLOAD_DIR = "uploaded_files"
     PROCESSED_DIR = "processed_files"
+    RAW_FILES_DIR = os.path.join(PROCESSED_DIR, "raw")
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
     DATABASE_PATH = "conversations.db"
     MODEL_PATH = "qwen2.5-3b-instruct-q6_k.gguf"
-    REQUIRED_KEYS = ["SERPAPI_KEY"]
+    REQUIRED_KEYS = ["SERPAPI_KEY", "GOOGLE_API_KEY"]
+    ALLOWED_EXTENSIONS = {'.pdf', '.docx'}
+    GEMINI_MODELS = {
+        "reasoning": "gemini-2.0-flash-thinking-exp-01-21",
+        "default": "gemini-2.0-flash"
+    }
     
     @classmethod
     def validate_environment(cls):
@@ -42,12 +56,72 @@ class Config:
     def create_directories(cls):
         os.makedirs(cls.UPLOAD_DIR, exist_ok=True)
         os.makedirs(cls.PROCESSED_DIR, exist_ok=True)
+        os.makedirs(cls.RAW_FILES_DIR, exist_ok=True)
 
 # Initialize Configuration
 Config.validate_environment()
 Config.create_directories()
 
+# Initialize FastAPI app with logging middleware
 app = FastAPI()
+
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        
+        # Log request details
+        logger.info("Request started", extra={
+            "method": request.method,
+            "path": request.url.path,
+            "client_host": request.client.host if request.client else None,
+            "query_params": str(request.query_params)
+        })
+        
+        try:
+            response = await call_next(request)
+            process_time = time.time() - start_time
+            
+            # Log response details
+            logger.info("Request completed", extra={
+                "status_code": response.status_code,
+                "process_time": f"{process_time:.3f}s"
+            })
+            
+            return response
+        except Exception as exc:
+            process_time = time.time() - start_time
+            logger.error("Request failed", extra={
+                "error": str(exc),
+                "process_time": f"{process_time:.3f}s"
+            })
+            raise
+
+app.add_middleware(LoggingMiddleware)
+
+# Error handling with logging
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logger.error("HTTP Exception", extra={
+        "status_code": exc.status_code,
+        "detail": exc.detail,
+        "path": request.url.path
+    })
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled Exception", extra={
+        "error": str(exc),
+        "type": type(exc).__name__,
+        "path": request.url.path
+    }, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
+    )
 
 # Model Initialization and Service Clients
 class ModelManager:
@@ -128,38 +202,56 @@ class ReasoningEngine:
             return await ReasoningEngine._process_with_fallback(prompt)
 
     @staticmethod
-    async def _process_with_gemini_thinking(prompt: str, images: List[str]) -> str:
-        gemini = model_manager.get_client("gemini")
-        if not gemini:
-            raise HTTPException(status_code=400, detail="Gemini API required")
-        
-        pil_images = [Image.open(BytesIO(base64.b64decode(img))).resize((256, 256)) 
-                     for img in images]
-        
-        response = gemini.models.generate_content(
-            model='gemini-2.0-flash-thinking-exp-01-21',
-            contents=pil_images + [prompt],
-            config={'thinking_config': {'include_thoughts': True}}
-        )
-        
-        reasoning = []
-        if response.candidates:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, 'thought') and part.thought:
-                    reasoning.append(part.text)
-                else:
-                    reasoning.append(part.text)
-        return "\n".join(reasoning) if reasoning else "No reasoning generated"
+    async def _process_with_deepseek_reasoner(prompt: str):
+        try:
+            deepseek_client = model_manager.get_client("deepseek")
+            if not deepseek_client:
+                logger.warning("Deepseek client not available, falling back to Gemini")
+                return await ReasoningEngine._process_with_gemini_thinking(prompt, [])
+            
+            response = deepseek_client.chat.completions.create(
+                model="deepseek-reasoner",
+                messages=[
+                    {"role": "system", "content": "You are an expert at reasoning and analysis. Break down complex problems step by step."},
+                    {"role": "user", "content": f"Analyze this query step by step:\n{prompt}"}
+                ],
+                temperature=0.3,
+                max_tokens=1
+            )
+            
+            # Extract reasoning_content from response
+            try:
+                reasoning = response.choices[0].message.reasoning_content
+                if not reasoning:
+                    logger.warning("Empty reasoning_content received from deepseek-reasoner")
+                    return await ReasoningEngine._process_with_gemini_thinking(prompt, [])
+                return reasoning
+            except AttributeError:
+                logger.error("Missing reasoning_content in deepseek-reasoner response")
+                return await ReasoningEngine._process_with_gemini_thinking(prompt, [])
+                
+        except Exception as e:
+            logger.error(f"Deepseek reasoning failed: {str(e)}")
+            return await ReasoningEngine._process_with_gemini_thinking(prompt, [])
 
     @staticmethod
-    async def _process_with_deepseek_reasoner(prompt: str) -> str:
-        deepseek = model_manager.get_client("deepseek")
-        response = deepseek.chat.completions.create(
-            model="deepseek-reasoner",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1000
-        )
-        return response.choices[0].message.content
+    async def _process_with_gemini_thinking(prompt: str, images: List[str]):
+        try:
+            gemini_client = model_manager.get_client("gemini")
+            if not gemini_client:
+                return await ReasoningEngine._process_with_fallback(prompt)
+            
+            sys_instruct = "You are an expert at reasoning and analysis. Break down complex problems step by step."
+            response = gemini_client.models.generate_content(
+                model=Config.GEMINI_MODELS["reasoning"],
+                config=types.GenerateContentConfig(system_instruction=sys_instruct),
+                contents=[prompt]
+            )
+            # Return Gemini response directly
+            return response.candidates[0].text
+        except Exception as e:
+            logger.error(f"Gemini thinking failed: {str(e)}")
+            return await ReasoningEngine._process_with_fallback(prompt)
 
     @staticmethod
     async def _process_with_fallback(prompt: str) -> str:
@@ -295,6 +387,73 @@ class DocumentProcessor:
             'images': []
         }
 
+# File Handling
+class FileHandler:
+    def __init__(self):
+        self.file_metadata = {}
+
+    async def save_raw_file(self, file: UploadFile) -> str:
+        """Save uploaded file to raw files directory and return file ID"""
+        # Validate file extension
+        file_extension = Path(file.filename).suffix.lower()
+        if file_extension not in Config.ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type. Allowed types: {', '.join(Config.ALLOWED_EXTENSIONS)}"
+            )
+
+        # Generate unique file ID and path
+        file_id = str(uuid.uuid4())
+        file_path = Path(Config.RAW_FILES_DIR) / f"{file_id}{file_extension}"
+
+        # Save file metadata
+        self.file_metadata[file_id] = {
+            "original_name": file.filename,
+            "file_path": str(file_path),
+            "mime_type": file.content_type,
+            "timestamp": time.time()
+        }
+
+        # Save file
+        try:
+            contents = await file.read()
+            if len(contents) > Config.MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File size exceeds maximum limit of {Config.MAX_FILE_SIZE // (1024*1024)}MB"
+                )
+            
+            with open(file_path, "wb") as f:
+                f.write(contents)
+            
+            return file_id
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error saving file: {str(e)}"
+            )
+
+    def get_file_path(self, file_id: str) -> str:
+        """Get file path from file ID"""
+        if file_id not in self.file_metadata:
+            raise HTTPException(
+                status_code=404,
+                detail="File not found"
+            )
+        return self.file_metadata[file_id]["file_path"]
+
+    def get_mime_type(self, file_id: str) -> str:
+        """Get MIME type from file ID"""
+        if file_id not in self.file_metadata:
+            raise HTTPException(
+                status_code=404,
+                detail="File not found"
+            )
+        return self.file_metadata[file_id]["mime_type"]
+
+# Initialize File Handler
+file_handler = FileHandler()
+
 # Conversation Management
 class Conversation:
     def __init__(self):
@@ -326,6 +485,7 @@ class ChatRequest(BaseModel):
     enable_search: bool = False
     enable_doc_context: bool = False
     enable_reasoning: bool = False
+    file_id: Optional[str] = None
     images: Optional[List[str]] = None
 
 class GenerateRequest(BaseModel):
@@ -339,12 +499,85 @@ class GenerateRequest(BaseModel):
 # API Endpoints
 @app.post("/chat")
 async def chat_completion(request: ChatRequest):
+    logger.info("Chat completion request received", extra={
+        "conversation_id": request.conversation_id,
+        "enable_search": request.enable_search,
+        "enable_doc_context": request.enable_doc_context,
+        "enable_reasoning": request.enable_reasoning,
+        "file_id": request.file_id
+    })
+    
     try:
-        # Initialize conversation
-        conv = conversations.get(request.conversation_id) or Conversation()
-        if not conv.id in conversations:
-            conversations[conv.id] = conv
+        conversation = conversations.get(request.conversation_id)
+        if not conversation:
+            conversation = Conversation()
+            conversations[conversation.id] = conversation
+            logger.info("New conversation created", extra={"conversation_id": conversation.id})
+            
+        # Initialize response components
+        search_results = ""
+        doc_context = ""
+        final_prompt = request.prompt
 
+        # Handle file processing if file_id is provided
+        if request.file_id:
+            try:
+                file_path = file_handler.get_file_path(request.file_id)
+                mime_type = file_handler.get_mime_type(request.file_id)
+                
+                # Read file bytes
+                with open(file_path, "rb") as f:
+                    file_bytes = f.read()
+
+                # Get Gemini client
+                gemini_client = model_manager.get_client("gemini")
+                if not gemini_client:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Gemini client not initialized"
+                    )
+
+                # Select model based on reasoning flag
+                model = Config.GEMINI_MODELS["reasoning"] if request.enable_reasoning else Config.GEMINI_MODELS["default"]
+
+                # Create content parts
+                contents = [
+                    types.Part.from_bytes(
+                        data=file_bytes,
+                        mime_type=mime_type
+                    ),
+                    request.prompt
+                ]
+
+                # Generate response
+                response = gemini_client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction="You are an expert at analyzing documents and providing detailed, accurate responses."
+                    )
+                )
+
+                if not response.candidates:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="No response generated from Gemini"
+                    )
+
+                return {
+                    "conversation_id": conversation.id,
+                    "response": response.text,
+                    "search_results": search_results,
+                    "doc_context": doc_context
+                }
+
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error processing file with Gemini: {str(e)}"
+                )
+
+        # Continue with existing chat logic for non-file requests
         final_prompt = request.prompt
         search_query = None
         doc_context = None
@@ -352,22 +585,81 @@ async def chat_completion(request: ChatRequest):
 
         # Build context chain
         if request.enable_search:
-            search_query = await generate_search_query(request.prompt, conv.id)
-            if search_query not in conv.search_cache:
-                conv.search_cache[search_query] = web_search(search_query)
-                if len(conv.search_cache) > 3:
-                    del conv.search_cache[next(iter(conv.search_cache))]
-            search_context = conv.search_cache[search_query]["context"]
+            search_query = await generate_search_query(request.prompt, conversation.id)
+            if search_query not in conversation.search_cache:
+                conversation.search_cache[search_query] = web_search(search_query)
+                if len(conversation.search_cache) > 3:
+                    del conversation.search_cache[next(iter(conversation.search_cache))]
+            search_context = conversation.search_cache[search_query]["context"]
             final_prompt = f"Web Context:\n{search_context}\n\n{final_prompt}"
 
         if request.enable_doc_context:
             doc_context = ContentHandler.get_document_context()
             if doc_context:
+                if not request.enable_reasoning:
+                    processed = False
+                    # Try Deepseek first
+                    deepseek_client = model_manager.get_client("deepseek")
+                    if deepseek_client:
+                        try:
+                            deepseek_response = deepseek_client.chat.completions.create(
+                                model="deepseek-chat",
+                                messages=[
+                                    {"role": "system", "content": "You are an expert at analyzing documents and providing concise, relevant summaries."},
+                                    {"role": "user", "content": f"Given this document context:\n{doc_context}\n\nProvide a concise summary focusing on the most relevant information for this user query: {request.prompt}"}
+                                ],
+                                temperature=0.3,
+                                max_tokens=1000
+                            )
+                            doc_context = deepseek_response.choices[0].message.content
+                            processed = True
+                        except Exception as e:
+                            print(f"Deepseek chat failed: {str(e)}")
+                    
+                    # If Deepseek failed or wasn't available, use Gemini flash
+                    if not processed:
+                        gemini_client = model_manager.get_client("gemini")
+                        if gemini_client:
+                            try:
+                                gemini_response = gemini_client.models.generate_content(
+                                    model=Config.GEMINI_MODELS["default"],
+                                    config=types.GenerateContentConfig(
+                                        system_instruction="You are an expert at analyzing documents and providing concise, relevant summaries."
+                                    ),
+                                    contents=[f"Given this document context:\n{doc_context}\n\nProvide a concise summary focusing on the most relevant information for this user query: {request.prompt}"]
+                                )
+                                doc_context = gemini_response.candidates[0].text
+                            except Exception as e:
+                                print(f"Gemini flash failed: {str(e)}")
+                
                 final_prompt = f"Document Context:\n{doc_context}\n\n{final_prompt}"
         if request.enable_reasoning:
             reasoning_content = await ReasoningEngine.get_reasoning(final_prompt, request.images)
             if reasoning_content:
                 final_prompt = f"{final_prompt}\n\nReasoning Context: {reasoning_content}"
+                # Return Gemini response directly for reasoning
+                gemini_client = model_manager.get_client("gemini")
+                if not gemini_client:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Gemini client not initialized"
+                    )
+                gemini_response = gemini_client.models.generate_content(
+                    model=Config.GEMINI_MODELS["reasoning"],
+                    config=types.GenerateContentConfig(
+                        system_instruction="You are an expert at analyzing documents and providing detailed, accurate responses."
+                    ),
+                    contents=[final_prompt]
+                )
+                return {
+                    "response": gemini_response.candidates[0].text,
+                    "reasoning": reasoning_content,
+                    "search_query": search_query if request.enable_search else None,
+                    "document_context_present": bool(doc_context) if request.enable_doc_context else None,
+                    "conversation_id": conversation.id,
+                    "history": conversation.get_messages()
+                }
+            # Fallback to local LLM if reasoning failed
             output = model_manager.llm(
                 final_prompt + "\n\nUsing the context provided, give a concise answer.",
                 max_tokens=request.max_tokens,
@@ -376,9 +668,14 @@ async def chat_completion(request: ChatRequest):
             response_text = output["choices"][0]["text"]
         elif request.images and len(request.images) > 0:
             sys_instruct = "You are a expert document analyser and give analysis of documents uploaded"
-            gemini_client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+            gemini_client = model_manager.get_client("gemini")
+            if not gemini_client:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Gemini client not initialized"
+                )
             gemini_response = gemini_client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=Config.GEMINI_MODELS["default"],
                 config=types.GenerateContentConfig(system_instruction=sys_instruct),
                 contents=[final_prompt]
             )
@@ -392,20 +689,65 @@ async def chat_completion(request: ChatRequest):
             response_text = output["choices"][0]["text"]
 
         # Update conversation
-        conv.add_message("user", request.prompt)
-        conv.add_message("assistant", response_text)
+        conversation.add_message("user", request.prompt)
+        conversation.add_message("assistant", response_text)
 
+        logger.info("Chat completion successful", extra={
+            "conversation_id": conversation.id,
+            "response_length": len(str(response_text))
+        })
         return {
             "response": response_text,
             "reasoning": reasoning_content if request.enable_reasoning else None,
             "search_query": search_query if request.enable_search else None,
             "document_context_present": bool(doc_context) if request.enable_doc_context else None,
-            "conversation_id": conv.id,
-            "history": conv.get_messages()
+            "conversation_id": conversation.id,
+            "history": conversation.get_messages()
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Chat completion failed", extra={
+            "error": str(e),
+            "conversation_id": request.conversation_id
+        }, exc_info=True)
+        raise
+
+@app.post("/upload")
+async def upload_file(
+    file: UploadFile,
+    conversation_id: Optional[str] = None
+):
+    logger.info("File upload started", extra={
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "conversation_id": conversation_id
+    })
+    
+    try:
+        # Save file using FileHandler
+        file_id = await file_handler.save_raw_file(file)
+        
+        logger.info("File upload successful", extra={
+            "file_id": file_id,
+            "conversation_id": conversation_id,
+            "size_bytes": os.path.getsize(file_handler.get_file_path(file_id))
+        })
+        return {
+            "status": "success",
+            "file_id": file_id,
+            "original_filename": file.filename,
+            "conversation_id": conversation_id
+        }
+        
+    except Exception as e:
+        logger.error("File upload failed", extra={
+            "filename": file.filename,
+            "error": str(e)
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing file: {str(e)}"
+        )
 
 @app.post("/process-document")
 async def process_document(
@@ -460,7 +802,10 @@ async def generate_search_query(prompt: str, conversation_id: str) -> str:
     
     try:
         if not model_manager.get_client("deepseek"):
-            raise HTTPException(status_code=400, detail="Deepseek API required for search")
+            raise HTTPException(
+                status_code=400,
+                detail="Deepseek API required for search"
+            )
             
         conv = conversations.get(conversation_id)
         if conv:
@@ -542,6 +887,42 @@ async def generate_text(request: GenerateRequest):
         if request.enable_doc_context:
             doc_context = ContentHandler.get_document_context()
             if doc_context:
+                processed = False
+                # Try Deepseek first
+                deepseek_client = model_manager.get_client("deepseek")
+                if deepseek_client:
+                    try:
+                        deepseek_response = deepseek_client.chat.completions.create(
+                            model="deepseek-chat",
+                            messages=[
+                                {"role": "system", "content": "You are an expert at analyzing documents and providing concise, relevant summaries."},
+                                {"role": "user", "content": f"Given this document context:\n{doc_context}\n\nProvide a concise summary focusing on the most relevant information for this user query: {request.prompt}"}
+                            ],
+                            temperature=0.3,
+                            max_tokens=1000
+                        )
+                        doc_context = deepseek_response.choices[0].message.content
+                        processed = True
+                    except Exception as e:
+                        print(f"Deepseek processing failed: {str(e)}")
+                
+                # If Deepseek failed or wasn't available, try Gemini
+                if not processed:
+                    gemini_client = model_manager.get_client("gemini")
+                    if gemini_client:
+                        try:
+                            gemini_response = gemini_client.models.generate_content(
+                                model=Config.GEMINI_MODELS["default"],
+                                config=types.GenerateContentConfig(
+                                    system_instruction="You are an expert at analyzing documents and providing concise, relevant summaries."
+                                ),
+                                contents=[f"Given this document context:\n{doc_context}\n\nProvide a concise summary focusing on the most relevant information for this user query: {request.prompt}"]
+                            )
+                            doc_context = gemini_response.candidates[0].text
+                            processed = True
+                        except Exception as e:
+                            print(f"Gemini processing failed: {str(e)}")
+                
                 final_prompt = f"Document Context:\n{doc_context}\n\n{final_prompt}"
 
         # Handle reasoning if enabled

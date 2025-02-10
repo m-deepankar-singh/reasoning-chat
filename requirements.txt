@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 python-dotenv
-openai
+openai>=1.0.0
 google-generativeai
 llama-cpp-python==0.3.7
 serpapi
@@ -21,3 +21,4 @@ html2text
 google-genai
 PyMuPDF
 google-search-results
+python-json-logger==2.0.7
