@@ -1,0 +1,115 @@
+graph TD
+    %% Main Application Setup
+    A[FastAPI Application] --> B[CORS Middleware]
+    B --> B1[Allow All Origins]
+    B --> B2[Allow All Methods]
+    B --> B3[Allow All Headers]
+    B --> C[Upload Config Middleware]
+    C --> C1[File Size Limits]
+    C --> C2[Allowed File Types]
+
+    %% Environment and Config
+    ENV[Environment Variables] --> D1[Project Settings]
+    D1 --> A
+    D1 --> API[API Settings]
+    API --> API1[API Version]
+    API --> API2[Base URL]
+    API --> API3[Project Name]
+
+    %% Database Setup
+    A --> D[Initialize SQLite DB]
+    D --> D2[Conversations Table]
+    D --> D3[Files Table]
+    
+    %% Router Integration
+    A --> E[Chat Router]
+    A --> F[Files Router]
+    
+    %% Chat Flow
+    E --> G[Chat Endpoint]
+    G --> U[ChatRequest Schema]
+    U --> U1[Prompt]
+    U --> U2[Max Tokens]
+    U --> U3[Temperature]
+    U --> U4[Enable Reasoning]
+    U --> U5[Enable Doc Context]
+    U --> U6[Conversation ID]
+
+    G --> H{Enable Doc Context}
+    H --> I[Process Markdown Documents]
+    I --> Y[Document Context Service]
+    Y --> Y1[Load Documents]
+    Y --> Y2[Extract Context]
+    Y --> Y3[Generate Response]
+    
+    I --> J[Process Raw Documents]
+    J --> J1[Process Text Files]
+    J --> J2[Process PDFs]
+    
+    H --> K[Regular Chat Processing]
+    
+    %% Reasoning Flow
+    K --> L{Enable Reasoning}
+    L --> M[DeepSeek Reasoner]
+    M --> W[Model Manager Service]
+    W --> W1[Load Model]
+    W --> W2[Set Parameters]
+    W --> W3[API Keys]
+    
+    L --> N[Direct Response]
+    
+    %% Response Processing
+    M --> O[Generate Response]
+    N --> O
+    O --> X[Reasoning Engine Service]
+    X --> X1[Apply Reasoning]
+    X --> X2[Format Response]
+    X --> X3[Validate Output]
+    
+    O --> P[Save to Conversation]
+    P --> P1[Message Object]
+    P --> P2[Conversation History]
+    
+    P --> Q[Store in Database]
+    Q --> Z[ConversationDB]
+    Z --> Z1[Save Messages]
+    Z --> Z2[Update Timestamp]
+    Z --> Z3[Manage History]
+    
+    %% Additional Endpoints
+    E --> R[Conversation Endpoint]
+    R --> R1[Fetch History]
+    R --> R2[Message List]
+    
+    E --> S[Test LLM Endpoint]
+    S --> S1[Local Model]
+    S --> S2[Model Response]
+    
+    E --> T[Test DeepSeek Endpoint]
+    T --> T1[API Connection]
+    T --> T2[API Response]
+    
+    %% Response Schema
+    O --> V[ChatResponse Schema]
+    V --> V1[Content]
+    V --> V2[Conversation ID]
+    V --> V3[Reasoning Details]
+    
+    %% Error Handling
+    ERR[Error Handling] --> ERR1[API Errors]
+    ERR --> ERR2[Database Errors]
+    ERR --> ERR3[Model Errors]
+    ERR --> ERR4[HTTP Exceptions]
+    
+    %% Styling
+    classDef endpoint fill:#f9f,stroke:#333,stroke-width:2px
+    classDef service fill:#bbf,stroke:#333,stroke-width:2px
+    classDef schema fill:#bfb,stroke:#333,stroke-width:2px
+    classDef config fill:#fdb,stroke:#333,stroke-width:2px
+    classDef error fill:#fdd,stroke:#333,stroke-width:2px
+    
+    class G,R,S,T endpoint
+    class W,X,Y service
+    class U,V schema
+    class D1,API,ENV config
+    class ERR,ERR1,ERR2,ERR3,ERR4 error

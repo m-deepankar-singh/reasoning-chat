@@ -1,0 +1,11 @@
+Collecting pydantic-settings
+  Obtaining dependency information for pydantic-settings from https://files.pythonhosted.org/packages/b4/46/93416fdae86d40879714f72956ac14df9c7b76f7d41a4d68aa9f71a0028b/pydantic_settings-2.7.1-py3-none-any.whl.metadata
+  Using cached pydantic_settings-2.7.1-py3-none-any.whl.metadata (3.5 kB)
+Requirement already satisfied: pydantic>=2.7.0 in c:\users\singh\desktop\fastapi-openai\venv\lib\site-packages (from pydantic-settings) (2.10.6)
+Requirement already satisfied: python-dotenv>=0.21.0 in c:\users\singh\desktop\fastapi-openai\venv\lib\site-packages (from pydantic-settings) (1.0.1)
+Requirement already satisfied: annotated-types>=0.6.0 in c:\users\singh\desktop\fastapi-openai\venv\lib\site-packages (from pydantic>=2.7.0->pydantic-settings) (0.7.0)
+Requirement already satisfied: pydantic-core==2.27.2 in c:\users\singh\desktop\fastapi-openai\venv\lib\site-packages (from pydantic>=2.7.0->pydantic-settings) (2.27.2)
+Requirement already satisfied: typing-extensions>=4.12.2 in c:\users\singh\desktop\fastapi-openai\venv\lib\site-packages (from pydantic>=2.7.0->pydantic-settings) (4.12.2)
+Using cached pydantic_settings-2.7.1-py3-none-any.whl (29 kB)
+Installing collected packages: pydantic-settings
+Successfully installed pydantic-settings-2.7.1
