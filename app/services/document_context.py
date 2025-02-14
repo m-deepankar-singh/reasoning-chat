@@ -59,12 +59,13 @@ class DocumentContextService:
         logger.debug(f"Formatted context from {len(documents)} documents")
         return formatted_context
 
-    async def process_raw_documents(self, query: str) -> str:
+    async def process_raw_documents(self, query: str, enable_reasoning: bool = False) -> str:
         """
         Process raw documents using Gemini model.
         
         Args:
             query (str): Query to process documents with
+            enable_reasoning (bool): Whether to use reasoning model
             
         Returns:
             str: Generated response from Gemini
@@ -72,10 +73,6 @@ class DocumentContextService:
         try:
             # Initialize Gemini client
             genai.configure(api_key=settings.GOOGLE_API_KEY)
-            
-            # Select model based on reasoning state
-            model_name = settings.GEMINI_MODELS["reasoning"] if settings.ENABLE_REASONING else settings.GEMINI_MODELS["default"]
-            model = genai.GenerativeModel(model_name)
             
             # Get list of PDF files
             pdf_files = self.get_raw_documents()
@@ -88,6 +85,18 @@ class DocumentContextService:
                 try:
                     # Read PDF as bytes
                     pdf_bytes = read_pdf_bytes(pdf_path)
+                    
+                    # Debug log for reasoning state
+                    logger.debug(f"Runtime ENABLE_REASONING is set to: {enable_reasoning}")
+                    
+                    # Select model based on runtime reasoning state
+                    if enable_reasoning:
+                        model_name = settings.GEMINI_MODELS["reasoning"]  # gemini-2.0-flash-thinking-exp-01-21
+                    else:
+                        model_name = settings.GEMINI_MODELS["default"]    # gemini-2.0-flash
+                        
+                    model = genai.GenerativeModel(model_name)
+                    logger.warning(f"[LLM SELECTION] Processing PDF {pdf_file} with Gemini model: {model_name} (reasoning_enabled={enable_reasoning})")
                     
                     # Create content parts for Gemini
                     response = model.generate_content(
@@ -131,6 +140,7 @@ class DocumentContextService:
             # Format document context
             context = self.format_document_context(documents)
             logger.info(f"Processing query with context from {len(documents)} documents")
+            logger.warning("[LLM SELECTION] Using Deepseek for processing markdown documents")
             
             # Create a structured prompt that combines context and query
             structured_prompt = f"""Based on the following document context, please answer this question: {query}

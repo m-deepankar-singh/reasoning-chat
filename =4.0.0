@@ -1,9 +1,0 @@
-Collecting reportlab
-  Obtaining dependency information for reportlab from https://files.pythonhosted.org/packages/45/b0/6659dae8bdf1ab0079451714ff97a046fb9d1317a257dbcb37b4783ec4d5/reportlab-4.3.0-py3-none-any.whl.metadata
-  Downloading reportlab-4.3.0-py3-none-any.whl.metadata (1.5 kB)
-Requirement already satisfied: pillow>=9.0.0 in c:\users\singh\desktop\fastapi-openai\venv\lib\site-packages (from reportlab) (11.1.0)
-Requirement already satisfied: chardet in c:\users\singh\desktop\fastapi-openai\venv\lib\site-packages (from reportlab) (5.2.0)
-Downloading reportlab-4.3.0-py3-none-any.whl (1.9 MB)
-   ---------------------------------------- 1.9/1.9 MB 12.4 MB/s eta 0:00:00
-Installing collected packages: reportlab
-Successfully installed reportlab-4.3.0

@@ -14,6 +14,7 @@ from tempfile import NamedTemporaryFile
 from typing import Dict, List, Optional, Any, Union
 from app.utilities.pdf_utils import pdf_has_images, convert_pdf_to_markdown
 import logging
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class DocumentProcessor:
     """Handles document processing operations."""
     
     @staticmethod
-    async def process_document(file_id: str) -> dict:
+    async def process_document(file_id: str, enable_reasoning: bool = False) -> dict:
         """Process document by file ID and return processed file info."""
         file_path = file_handler.get_file_path(file_id)
         if not file_path:
@@ -39,11 +40,29 @@ class DocumentProcessor:
                 has_images = pdf_has_images(file_path)
                 
                 if has_images:
+                    # For PDFs with images, use Gemini directly without local LLM processing
+                    logger.info(f"PDF {file_id} contains images, using Gemini model directly")
+                    
+                    # Configure Gemini based on reasoning state
+                    genai.configure(api_key=settings.GOOGLE_API_KEY)
+                    
+                    # Debug log for reasoning state
+                    logger.debug(f"Runtime ENABLE_REASONING is set to: {enable_reasoning}")
+                    
+                    if enable_reasoning:
+                        model_name = settings.GEMINI_MODELS["reasoning"]  # gemini-2.0-flash-thinking-exp-01-21
+                    else:
+                        model_name = settings.GEMINI_MODELS["default"]    # gemini-2.0-flash
+                        
+                    logger.warning(f"[LLM SELECTION] Using Gemini model {model_name} for PDF with images (reasoning_enabled={enable_reasoning})")
+                    
                     # File is already in raw directory, just use it
                     file_type = "pdf"
                     processed_file_path = file_path
                 else:
-                    # Convert to markdown and store in processed directory
+                    # For PDFs without images, follow existing markdown conversion process
+                    logger.info(f"PDF {file_id} has no images, converting to markdown")
+                    logger.warning("[LLM SELECTION] Using local LLM for PDF without images")
                     markdown_content, title = convert_pdf_to_markdown(file_path)
                     processed_file_id = str(uuid.uuid4())
                     processed_file_path = Path(settings.PROCESSED_DIR) / f"{processed_file_id}.md"
@@ -64,7 +83,8 @@ class DocumentProcessor:
                 "original_name": file_handler.file_metadata[file_id]["original_name"],
                 "processed_path": str(processed_file_path),
                 "file_type": file_type,
-                "has_images": has_images if file_ext == '.pdf' else None
+                "has_images": has_images if file_ext == '.pdf' else None,
+                "model_used": settings.GEMINI_MODELS["reasoning"] if has_images and enable_reasoning else settings.GEMINI_MODELS["default"] if has_images else "local_llm"
             }
         except Exception as e:
             logger.error(f"Error processing document: {str(e)}")

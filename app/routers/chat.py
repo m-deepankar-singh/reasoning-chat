@@ -48,7 +48,11 @@ async def chat_completion(request: ChatRequest):
                     logger.info("Successfully processed markdown documents")
                 else:
                     logger.info("No markdown response, trying raw documents")
-                    response = await document_context_service.process_raw_documents(request.prompt)
+                    # Pass the enable_reasoning parameter from the request
+                    response = await document_context_service.process_raw_documents(
+                        query=request.prompt,
+                        enable_reasoning=request.enable_reasoning
+                    )
                 
                 if response:
                     logger.info("Successfully processed document context")
